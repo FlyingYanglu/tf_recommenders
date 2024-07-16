@@ -1,4 +1,4 @@
-# Copyright 2024 The TensorFlow Recommenders Authors.
+# Copyright 2022 The TensorFlow Recommenders Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,28 @@ from typing import Dict, Optional, Text, Tuple, Union
 import uuid
 
 import tensorflow as tf
+
+
+
+
+from keras.initializers import Constant
+from keras.src.backend import standardize_dtype
+from keras.src import ops
+
+
+def new_call(self, shape, dtype=None):
+    dtype = standardize_dtype(dtype)
+    if dtype != "string":
+        return ops.cast(self.value, dtype=dtype) * ops.ones(
+            shape=shape, dtype=dtype
+        )
+    else:
+        return ops.cast(self.value, dtype=dtype)
+    
+
+# Overwrite the __call__ method of the Constant class
+Constant.__call__ = new_call
+
 
 try:
   # ScaNN is an optional dependency, and might not be present.
@@ -208,6 +230,8 @@ class TopK(tf.keras.Model, abc.ABC):
           [identifiers for identifiers, _ in identifiers_and_candidates],
           axis=0
       )
+      # print("candidates", candidates)
+      # print("identifiers", identifiers)
     else:
       candidates = tf.concat(list(candidates), axis=0)
       identifiers = None
@@ -373,7 +397,7 @@ class Streaming(TopK):
     self._num_parallel_calls = num_parallel_calls
     self._sorted = sorted_order
 
-    self._counter = self.add_weight("counter", dtype=tf.int32, trainable=False)
+    self._counter = self.add_weight(name="counter", dtype=tf.int32, trainable=False)
 
   def index_from_dataset(
       self,
@@ -466,7 +490,8 @@ class Streaming(TopK):
     def enumerate_rows(batch: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
       """Enumerates rows in each batch using a total element counter."""
 
-      starting_counter = self._counter.read_value()
+      starting_counter = self._counter.value
+      print("STARING_COUNTER", starting_counter)
       end_counter = self._counter.assign_add(tf.shape(batch)[0])
 
       return tf.range(starting_counter, end_counter), batch
@@ -532,7 +557,7 @@ class BruteForce(TopK):
 
     if identifiers is None:
       identifiers = tf.range(candidates.shape[0])
-
+    # print("candidates", candidates)
     if tf.rank(candidates) != 2:
       raise ValueError(
           f"The candidates tensor must be 2D (got {candidates.shape}).")
@@ -545,18 +570,19 @@ class BruteForce(TopK):
       )
 
     # We need any value that has the correct dtype.
-    identifiers_initial_value = tf.zeros((), dtype=identifiers.dtype)
+    identifiers_initial_value = tf.zeros(identifiers.shape, dtype=identifiers.dtype)
+    
+    initializers = Constant(value=identifiers_initial_value)
 
     self._identifiers = self.add_weight(
         name="identifiers",
         dtype=identifiers.dtype,
         shape=identifiers.shape,
-        initializer=tf.keras.initializers.Constant(
-            value=identifiers_initial_value),
+        initializer=initializers,
         trainable=False)
     self._candidates = self.add_weight(
         name="candidates",
-        dtype=candidates.dtype,
+        # dtype=candidates.dtype,
         shape=candidates.shape,
         initializer=tf.keras.initializers.Zeros(),
         trainable=False)
@@ -709,7 +735,7 @@ class ScaNN(TopK):
 
     if identifiers is not None:
       # We need any value that has the correct dtype.
-      identifiers_initial_value = tf.zeros((), dtype=identifiers.dtype)
+      identifiers_initial_value = tf.zeros(identifiers.shape, dtype=identifiers.dtype)
       self._identifiers = self.add_weight(
           name="identifiers",
           dtype=identifiers.dtype,
